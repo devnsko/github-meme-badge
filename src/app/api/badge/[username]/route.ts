@@ -1,14 +1,19 @@
+// src/app/api/badge/[username]/route.ts
+
 import { NextResponse } from 'next/server';
 
-export async function GET(
-  request: Request,
-  { params }: { params: { username: string } }
-) {
-  try {
-    // Ожидаем объект params, как требует Next.js
-    const { username } = await Promise.resolve(params);
+// Описываем структуру второго аргумента
+type Context = {
+  params: {
+    username: string;
+  };
+};
 
-    // Запрашиваем репозитории пользователя с GitHub
+export async function GET(request: Request, { params }: Context) {
+  try {
+    const { username } = params;
+
+    // Запрашиваем репозитории пользователя
     const res = await fetch(`https://api.github.com/users/${username}/repos`);
     if (!res.ok) {
       return new NextResponse(
@@ -18,7 +23,7 @@ export async function GET(
     }
     const repos = await res.json();
 
-    // Подсчет статистики
+    // Подсчёт статистики
     let stars = 0;
     let forks = 0;
     const totalRepos = repos.length;
@@ -32,14 +37,11 @@ export async function GET(
       }
     }
 
-    const topLanguage =
-      Object.keys(languages).length > 0
-        ? Object.keys(languages).reduce((a, b) =>
-            languages[a] > languages[b] ? a : b
-          )
-        : 'N/A';
+    const topLanguage = Object.keys(languages).length
+      ? Object.keys(languages).reduce((a, b) => (languages[a] > languages[b] ? a : b))
+      : 'N/A';
 
-    // Генерация базового мемного сообщения
+    // Пример генерации мемного текста
     const baseMessages = [
       "Твой код – как вирусный мем, никто не может устоять!",
       "GitHub вспыхнул от твоих коммитов, как трендовый мем!",
@@ -49,7 +51,6 @@ export async function GET(
     ];
     let funnyMessage = baseMessages[Math.floor(Math.random() * baseMessages.length)];
 
-    // Добавляем дерзкие посылы, основанные на статистике
     if (stars >= 50) {
       funnyMessage += " Звёзды сияют, как лайки под топовыми мемами!";
     } else {
@@ -82,7 +83,7 @@ export async function GET(
       }
     }
 
-    // Генерация SVG-бейджа
+    // Генерация SVG
     const svg = `
       <svg width="500" height="180" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="#111827"/>
@@ -98,24 +99,21 @@ export async function GET(
       </svg>
     `;
 
+    // Возвращаем ответ
     return new NextResponse(svg, {
       headers: { 'Content-Type': 'image/svg+xml' },
     });
-    } catch (error: unknown) {
-        let errorMessage: string;
-    
-        if (error instanceof Error) {
-        // Если error – инстанс стандартной ошибки
-        errorMessage = error.message;
-        } else {
-        // Если error – любой другой тип (строка, объект и т.д.)
-        errorMessage = String(error);
-        }
-    
-        return new NextResponse(
-        JSON.stringify({ error: errorMessage }),
-        { status: 500 }
-        );
+  } catch (error: unknown) {
+    let errorMessage = 'Unknown error';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else {
+      errorMessage = String(error);
     }
-    
+
+    return new NextResponse(
+      JSON.stringify({ error: errorMessage }),
+      { status: 500 }
+    );
+  }
 }
