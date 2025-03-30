@@ -1,19 +1,13 @@
-// src/app/api/badge/[username]/route.ts
-
 import { NextResponse } from 'next/server';
 
-// Описываем структуру второго аргумента
-type Context = {
-  params: {
-    username: string;
-  };
-};
-
-export async function GET(request: Request, { params }: Context) {
+export async function GET(
+  request: Request,
+  { params }: { params: { username: string } }
+) {
   try {
     const { username } = params;
 
-    // Запрашиваем репозитории пользователя
+    // Запрашиваем репозитории пользователя с GitHub
     const res = await fetch(`https://api.github.com/users/${username}/repos`);
     if (!res.ok) {
       return new NextResponse(
@@ -23,7 +17,7 @@ export async function GET(request: Request, { params }: Context) {
     }
     const repos = await res.json();
 
-    // Подсчёт статистики
+    // Подсчет статистики
     let stars = 0;
     let forks = 0;
     const totalRepos = repos.length;
@@ -38,10 +32,12 @@ export async function GET(request: Request, { params }: Context) {
     }
 
     const topLanguage = Object.keys(languages).length
-      ? Object.keys(languages).reduce((a, b) => (languages[a] > languages[b] ? a : b))
+      ? Object.keys(languages).reduce((a, b) =>
+          languages[a] > languages[b] ? a : b
+        )
       : 'N/A';
 
-    // Пример генерации мемного текста
+    // Генерация базового мемного сообщения
     const baseMessages = [
       "Твой код – как вирусный мем, никто не может устоять!",
       "GitHub вспыхнул от твоих коммитов, как трендовый мем!",
@@ -83,7 +79,7 @@ export async function GET(request: Request, { params }: Context) {
       }
     }
 
-    // Генерация SVG
+    // Генерация SVG-бейджа
     const svg = `
       <svg width="500" height="180" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="#111827"/>
@@ -99,7 +95,6 @@ export async function GET(request: Request, { params }: Context) {
       </svg>
     `;
 
-    // Возвращаем ответ
     return new NextResponse(svg, {
       headers: { 'Content-Type': 'image/svg+xml' },
     });
@@ -110,7 +105,6 @@ export async function GET(request: Request, { params }: Context) {
     } else {
       errorMessage = String(error);
     }
-
     return new NextResponse(
       JSON.stringify({ error: errorMessage }),
       { status: 500 }
