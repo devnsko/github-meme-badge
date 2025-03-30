@@ -2,12 +2,11 @@ import { NextResponse } from 'next/server';
 
 export async function GET(
   request: Request,
-  { params }: { params: { username: string } }
+  { params }: { params: Record<string, string> }
 ) {
   try {
-    const { username } = params;
+    const username = params.username;
 
-    // Запрашиваем репозитории пользователя с GitHub
     const res = await fetch(`https://api.github.com/users/${username}/repos`);
     if (!res.ok) {
       return new NextResponse(
@@ -17,7 +16,6 @@ export async function GET(
     }
     const repos = await res.json();
 
-    // Подсчет статистики
     let stars = 0;
     let forks = 0;
     const totalRepos = repos.length;
@@ -37,7 +35,6 @@ export async function GET(
         )
       : 'N/A';
 
-    // Генерация базового мемного сообщения
     const baseMessages = [
       "Твой код – как вирусный мем, никто не может устоять!",
       "GitHub вспыхнул от твоих коммитов, как трендовый мем!",
@@ -45,7 +42,8 @@ export async function GET(
       "Твои репозитории – эксклюзивный мем-контент, за которым охотятся все!",
       "Ты творишь код, как художник создает шедевры мемов!"
     ];
-    let funnyMessage = baseMessages[Math.floor(Math.random() * baseMessages.length)];
+    let funnyMessage =
+      baseMessages[Math.floor(Math.random() * baseMessages.length)];
 
     if (stars >= 50) {
       funnyMessage += " Звёзды сияют, как лайки под топовыми мемами!";
@@ -79,7 +77,6 @@ export async function GET(
       }
     }
 
-    // Генерация SVG-бейджа
     const svg = `
       <svg width="500" height="180" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="#111827"/>
