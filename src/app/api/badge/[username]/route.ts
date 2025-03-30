@@ -101,10 +101,21 @@ export async function GET(
     return new NextResponse(svg, {
       headers: { 'Content-Type': 'image/svg+xml' },
     });
-  } catch (error: any) {
-    return new NextResponse(
-      JSON.stringify({ error: error.toString() }),
-      { status: 500 }
-    );
-  }
+    } catch (error: unknown) {
+        let errorMessage: string;
+    
+        if (error instanceof Error) {
+        // Если error – инстанс стандартной ошибки
+        errorMessage = error.message;
+        } else {
+        // Если error – любой другой тип (строка, объект и т.д.)
+        errorMessage = String(error);
+        }
+    
+        return new NextResponse(
+        JSON.stringify({ error: errorMessage }),
+        { status: 500 }
+        );
+    }
+    
 }
