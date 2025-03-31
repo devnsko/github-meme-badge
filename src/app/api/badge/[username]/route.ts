@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server';
 
 export async function GET(
   request: Request,
-  { params }: { params: Record<string, string> }
+  { params }: { params: Promise<{ username: string }> }
 ) {
+  const { username } = await params;
+  
   try {
-    const username = params.username;
-
     const res = await fetch(`https://api.github.com/users/${username}/repos`);
     if (!res.ok) {
       return new NextResponse(
@@ -42,8 +42,7 @@ export async function GET(
       "Твои репозитории – эксклюзивный мем-контент, за которым охотятся все!",
       "Ты творишь код, как художник создает шедевры мемов!"
     ];
-    let funnyMessage =
-      baseMessages[Math.floor(Math.random() * baseMessages.length)];
+    let funnyMessage = baseMessages[Math.floor(Math.random() * baseMessages.length)];
 
     if (stars >= 50) {
       funnyMessage += " Звёзды сияют, как лайки под топовыми мемами!";
