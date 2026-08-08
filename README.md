@@ -1,36 +1,143 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Meme GitHub Badge
 
-## Getting Started
+Generate a self-contained SVG badge from any GitHub profile: real stats, an inlined avatar, and a punchline that stays the same every time someone loads your README.
 
-First, run the development server:
+```markdown
+![My GitHub meme badge](https://your-deployment.example.com/api/badges/octocat)
+```
+
+<!-- Replace the host above with your own deployment. -->
+
+---
+
+## Why it is built this way
+
+A README badge is an unusual thing to serve. It is fetched by image proxies rather than browsers, cached aggressively by people you will never meet, and embedded in pages you do not control. Three constraints follow from that, and they shaped most of the code:
+
+**The badge must be one file with no external references.** GitHub serves README images through its Camo proxy, which fetches the SVG and nothing else — an `<image href="https://…">` pointing at an avatar simply never loads. So the avatar is downloaded server-side and inlined as a base64 `data:` URI ([`src/lib/github.ts`](src/lib/github.ts)).
+
+**The badge must render outside a browser.** CSS custom properties (`var(--bg)`) are a browser feature; librsvg and resvg — used by thumbnailers, unfurlers and conversion pipelines — render an unresolved `var()` as black. Every colour is therefore written as a literal presentation attribute. The `auto` theme layers a `prefers-color-scheme` media query on top, so browsers switch to light while other renderers keep the dark defaults ([`src/lib/badge.ts`](src/lib/badge.ts)).
+
+**The joke must not change on every request.** The punchline is picked with an FNV-1a hash of the username rather than `Math.random()`, so a cache miss does not silently rewrite someone's README ([`src/lib/meme.ts`](src/lib/meme.ts)).
+
+There is no font engine in the runtime and the badge has to know its own height before it is drawn, so line wrapping runs on an estimated glyph-width table ([`src/lib/text.ts`](src/lib/text.ts)).
+
+## Titles and scoring
+
+Every badge carries a short earned title — `Fork Overlord`, `Polyglot Menace`, `Touch Grass Later`. It is not decorative: it falls out of a scoring pass over eleven signals, folded into seven normalised axes ([`src/lib/scoring.ts`](src/lib/scoring.ts)).
+
+| Axis | Built from |
+| --- | --- |
+| `reach` | total stars, followers |
+| `influence` | forks, share of repos with at least one star |
+| `output` | public repos, gists |
+| `craft` | average stars per original repo, hit rate |
+| `diversity` | distinct languages across original repos |
+| `activity` | days since the most recent push |
+| `tenure` | account age |
+
+Counts are normalised logarithmically. GitHub numbers span six orders of magnitude, so a linear scale would flatten almost everyone to zero and leave two accounts alone at the ceiling.
+
+The **archetype** is the axis a profile leans on hardest — which is why three famous repos read differently from two hundred quiet ones at a similar overall level. `activity` and `tenure` are discounted when choosing, because nearly everyone scores on them. Two states override the axes entirely: a year of silence makes an account `dormant` no matter how many stars it has, and a young, sparse account is a `rookie`.
+
+The **tier** (`low` / `mid` / `high`) comes from the weighted overall score and selects which pool the title is drawn from — 108 titles across 9 archetypes × 3 tiers, plus 40 taglines and ~90 stat-aware punchlines in [`src/lib/copy.ts`](src/lib/copy.ts). Stars and forks alone counted only original repos: a fork's stars belong to whoever wrote it.
+
+Every choice is seeded with an FNV-1a hash of the username, never `Math.random()`, so the badge in your README does not quietly rewrite itself.
+
+## API
+
+```
+GET /api/badges/:username
+```
+
+| Parameter | Values | Notes |
+| --- | --- | --- |
+| `:username` | GitHub login | An `@handle` or a full profile URL is accepted and normalised. |
+| `?theme` | `dark` (default), `light`, `auto` | `auto` follows the viewer's system colour scheme. |
+
+Responds with `image/svg+xml`. Errors are rendered *as a badge* rather than as JSON — the endpoint is consumed by `<img>`, where a JSON body shows up as a broken-image icon with no explanation. The HTTP status is still accurate (`400`, `404`, `429`, `504`, `500`), and `ETag` / `If-None-Match` are honoured.
+
+```bash
+curl "http://localhost:3000/api/badges/octocat?theme=light"
+```
+
+### Caching and limits
+
+- Responses carry `s-maxage=3600, stale-while-revalidate=86400`, so a CDN absorbs the repeat traffic a popular README generates.
+- Stars and forks are summed over the 300 most recently pushed repositories. Accounts above that show a `+` suffix on those figures.
+- Per-client rate limiting is a fixed window held in process memory. On serverless the real ceiling is *limit × instances* — deliberate, so that a Redis instance is not a hard dependency ([`src/lib/rate-limit.ts`](src/lib/rate-limit.ts)).
+- Badges can additionally be stored in Cloudflare R2, which skips GitHub entirely on a cache hit. See [Storage](#storage-cloudflare-r2-optional).
+
+## Storage (Cloudflare R2, optional)
+
+Generated badges are stored in R2 as plain SVG objects, keyed by username ([`src/lib/storage/r2.ts`](src/lib/storage/r2.ts)):
+
+```
+badges/<username>/<theme>.svg
+```
+
+**There is no database, and none is needed.** The SVG *is* the record: the object key carries the identity and R2's own `Last-Modified` carries the freshness, so there is no schema to migrate and no second system to keep in sync. Keys are lowercased, since GitHub logins are case-insensitive and `OctoCat` must not become a second object.
+
+With storage configured the route gains two behaviours:
+
+- **A fresh stored badge skips GitHub entirely.** Within the 6-hour TTL the SVG is served straight from R2, which is what stops a widely-embedded README from spending the API quota.
+- **A stale badge beats an error.** If GitHub is down, slow, or rate-limiting, the expired object is served instead of an error card.
+
+The response carries `X-Badge-Cache: hit | miss | stale`, so this is observable in production.
+
+Storage is optional throughout: with the environment unset every entry point becomes a no-op, and an R2 outage costs the cache, never the request. Reads and writes are capped at 3s, and writes run inside `after()` so the upload stays off the response path.
+
+### Setting it up
+
+Create a bucket and an R2 API token with **Object Read & Write**, then set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET`. Nothing else — no migration step.
+
+R2 is reached over its S3-compatible API, signed with [`aws4fetch`](https://github.com/mhart/aws4fetch) (~4kB over plain `fetch`) rather than the AWS SDK, which would add megabytes to a serverless bundle for one PUT and one GET. `R2_ENDPOINT` points the same code at any S3-compatible store, which is how the integration tests run against a local stub — and how you can run against MinIO locally.
+
+Setting `R2_PUBLIC_BASE_URL` (an r2.dev or custom domain on a public bucket) lets READMEs point at Cloudflare's edge instead of this app; `publicBadgeUrl()` builds those URLs.
+
+[`r2.ts`](src/lib/storage/r2.ts) opens with `import 'server-only'`, which turns an accidental import from a client component into a build error — the bucket credentials must never reach the browser.
+
+## Running locally
+
+```bash
+npm install
+```
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Copy `.env.example` to `.env.local` if you want to raise the GitHub rate limit:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | No | A token with **no scopes** lifts the GitHub REST limit from 60 to 5,000 requests/hour. Without it the app still works, just with the anonymous quota. |
+| `NEXT_PUBLIC_SITE_URL` | No | Absolute URL used for metadata and the copyable snippets. Inferred automatically on Vercel. |
+| `R2_ACCOUNT_ID` | No | Cloudflare account. All four R2 variables must be set to enable storage. |
+| `R2_ACCESS_KEY_ID` | No | From an R2 API token with Object Read & Write. |
+| `R2_SECRET_ACCESS_KEY` | No | Server-side only. Never prefix it with `NEXT_PUBLIC_`. |
+| `R2_BUCKET` | No | Bucket the badge objects are written to. |
+| `R2_ENDPOINT` | No | Override for any S3-compatible endpoint, e.g. MinIO. |
+| `R2_PUBLIC_BASE_URL` | No | Public bucket URL, if you want to serve badges from Cloudflare's edge. |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Checks
 
-## Learn More
+```bash
+npm run verify
+```
 
-To learn more about Next.js, take a look at the following resources:
+Runs ESLint, `tsc --noEmit` and the Vitest suite. CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs all three plus a production build on every push and pull request.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The tests cover the parts worth protecting: username parsing rejects traversal attempts rather than sanitising them, hostile profile fields are escaped instead of emitted as markup, an avatar that is not a base64 image data URI is dropped, wrapping stays inside its width budget, and no theme ever emits a `var(--…)`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Deploying
 
-## Deploy on Vercel
+Any Node host works; the project targets Vercel. Import the repository, optionally set `GITHUB_TOKEN`, and deploy — no other configuration is needed. The badge route runs on the Node.js runtime because it inlines avatars with `Buffer`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Stack
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Next.js 15 (App Router) · React 19 · TypeScript · Tailwind CSS v4 · Cloudflare R2 (optional) · Vitest · GitHub REST API
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
