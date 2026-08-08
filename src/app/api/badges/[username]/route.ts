@@ -1,134 +1,140 @@
-import path from 'path';
-import fs from 'fs/promises';
-import { existsSync } from 'fs';
-import { NextResponse } from 'next/server';
+import { createHash } from 'crypto';
+import { after } from 'next/server';
+import { isTheme, renderBadge, renderErrorBadge, type Theme } from '@/lib/badge';
+import { fetchStats, GitHubError } from '@/lib/github';
+import { clientKey, rateLimit } from '@/lib/rate-limit';
+import { scoreProfile } from '@/lib/scoring';
+import { readStoredBadge, storeBadge } from '@/lib/storage/r2';
+import { parseUsername } from '@/lib/username';
 
-// Разбиение строки на строки длиной не более maxChars
-function splitText(text: string, maxChars = 55): string[] {
-  const words = text.split(' ');
-  const lines: string[] = [];
-  let current = '';
+// Buffer (avatar inlining) and the in-memory limiter both need the Node runtime.
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-  for (const word of words) {
-    if ((current + word).length > maxChars) {
-      lines.push(current.trim());
-      current = word + ' ';
-    } else {
-      current += word + ' ';
-    }
-  }
+const SUCCESS_CACHE = 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400';
+const ERROR_CACHE = 'public, max-age=60, s-maxage=60';
+const UPSTREAM_TIMEOUT_MS = 8_000;
 
-  if (current.trim()) lines.push(current.trim());
-  return lines;
+/** Reported on `X-Badge-Cache` so the storage layer is observable in prod. */
+type CacheStatus = 'hit' | 'miss' | 'stale';
+
+function etagFor(svg: string): string {
+  return `"${createHash('sha256').update(svg).digest('hex').slice(0, 32)}"`;
+}
+
+function svgResponse(
+  svg: string,
+  {
+    status = 200,
+    cache = SUCCESS_CACHE,
+    cacheStatus,
+  }: { status?: number; cache?: string; cacheStatus?: CacheStatus } = {},
+): Response {
+  const headers: Record<string, string> = {
+    'Content-Type': 'image/svg+xml; charset=utf-8',
+    'Cache-Control': cache,
+    // The badge is meant to be embedded anywhere, but it must never be
+    // sniffed into something executable.
+    'X-Content-Type-Options': 'nosniff',
+    'Access-Control-Allow-Origin': '*',
+    ETag: etagFor(svg),
+  };
+
+  if (cacheStatus) headers['X-Badge-Cache'] = cacheStatus;
+
+  return new Response(svg, { status, headers });
+}
+
+function errorResponse(message: string, status: number, theme: Theme): Response {
+  return svgResponse(renderErrorBadge(message, theme), { status, cache: ERROR_CACHE });
+}
+
+/** 304 when the caller already holds this exact badge. */
+function notModified(request: Request, svg: string): Response | null {
+  const etag = etagFor(svg);
+  if (request.headers.get('if-none-match') !== etag) return null;
+
+  return new Response(null, {
+    status: 304,
+    headers: { ETag: etag, 'Cache-Control': SUCCESS_CACHE },
+  });
 }
 
 export async function GET(
   request: Request,
-  { params }: { params: Promise<{ username: string }> }
+  { params }: { params: Promise<{ username: string }> },
 ) {
-  const { username } = await params;
-  const filePath = path.join(process.cwd(), 'public', 'badges', `${username}.svg`);
+  const theme = (() => {
+    const requested = new URL(request.url).searchParams.get('theme');
+    return isTheme(requested) ? requested : 'dark';
+  })();
 
-  if (existsSync(filePath)) {
-    const content = await fs.readFile(filePath, 'utf-8');
-    return new NextResponse(content, {
-      headers: { 'Content-Type': 'image/svg+xml' },
+  const { username: raw } = await params;
+  // A malformed escape such as "%zz" makes decodeURIComponent throw; that is a
+  // bad request, not a server error.
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return null;
+    }
+  })();
+
+  const username = decoded === null ? null : parseUsername(decoded);
+
+  if (!username) {
+    return errorResponse('That is not a valid GitHub username.', 400, theme);
+  }
+
+  const limit = rateLimit(clientKey(request));
+  if (!limit.allowed) {
+    return new Response(renderErrorBadge('Too many requests, slow down a little.', theme), {
+      status: 429,
+      headers: {
+        'Content-Type': 'image/svg+xml; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Retry-After': String(Math.ceil((limit.resetAt - Date.now()) / 1000)),
+      },
     });
   }
 
+  // A stored badge that is still fresh skips GitHub entirely, which is what
+  // keeps a widely-embedded README from exhausting the API quota.
+  const stored = await readStoredBadge(username, theme);
+  if (stored && !stored.stale) {
+    return notModified(request, stored.svg) ?? svgResponse(stored.svg, { cacheStatus: 'hit' });
+  }
+
+  const timeout = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+
   try {
-    const res = await fetch(`https://api.github.com/users/${username}/repos`);
-    if (!res.ok) {
-      return new NextResponse(
-        JSON.stringify({ error: "Error: can't get info from your GitHub" }),
-        { status: res.status }
-      );
+    const stats = await fetchStats(username, timeout);
+    const score = scoreProfile(stats);
+    const svg = renderBadge(stats, theme, score);
+
+    // `after` keeps the upload off the response path without risking the
+    // serverless instance being frozen mid-write.
+    after(() => storeBadge(username, theme, svg));
+
+    return notModified(request, svg) ?? svgResponse(svg, { cacheStatus: 'miss' });
+  } catch (error) {
+    // GitHub is down, slow, or rate-limiting us — an expired badge still beats
+    // an error card in somebody's README.
+    if (stored) {
+      return svgResponse(stored.svg, { cacheStatus: 'stale', cache: ERROR_CACHE });
     }
 
-    const repos = await res.json();
-    let stars = 0;
-    let forks = 0;
-    const totalRepos = repos.length;
-    const languages: Record<string, number> = {};
-
-    for (const repo of repos) {
-      stars += repo.stargazers_count ?? 0;
-      forks += repo.forks_count ?? 0;
-      if (repo.language) {
-        languages[repo.language] = (languages[repo.language] || 0) + 1;
-      }
+    if (error instanceof GitHubError) {
+      const message =
+        error.status === 404 ? `No GitHub user called "${username}".` : error.message;
+      return errorResponse(message, error.status, theme);
     }
 
-    const topLanguage = Object.keys(languages).length
-      ? Object.keys(languages).reduce((a, b) => languages[a] > languages[b] ? a : b)
-      : 'N/A';
-
-    const baseMessages = [
-      "Your code is like a viral meme - no one can resist!",
-      "GitHub lights up with your commits like a trending meme!",
-      "Each commit is a new hit - pure meme magic!",
-      "Your repos are exclusive meme content - everyone’s chasing them!",
-      "You write code like an artist crafting meme masterpieces!"
-    ];
-
-    let funnyMessage = baseMessages[Math.floor(Math.random() * baseMessages.length)];
-
-    funnyMessage += stars >= 50
-      ? " Stars sparkle like likes on top-tier memes!"
-      : " Your commits are gaining steam like an epic meme blast!";
-
-    funnyMessage += forks >= 10
-      ? " Forks spread like meme reposts!"
-      : " Each fork is a secret weapon in your meme arsenal!";
-
-    funnyMessage += totalRepos >= 10
-      ? " Your repo collection is like a meme vault: abundant and always fresh!"
-      : " Each repo is a unique meme—a true exclusive!";
-
-    if (topLanguage !== 'N/A') {
-      const languageLines: Record<string, string> = {
-        JavaScript: " JavaScript buzzes under your fingers like a million-like meme!",
-        Python: " Python becomes a comedy show in your hands!",
-        Java: " Java drives your code like a spicy mega-meme!",
-        "C++": " C++ is your secret sauce for crafting high-tier memes!"
-      };
-      funnyMessage += languageLines[topLanguage] || ` ${topLanguage} turns into meme gold in your code!`;
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      return errorResponse('GitHub took too long to answer.', 504, theme);
     }
 
-    const wrappedLines = splitText(funnyMessage);
-
-    const tspans = wrappedLines
-      .map((line, i) =>
-        `<tspan x="50%" dy="${i === 0 ? '0' : '1.2em'}">${line}</tspan>`
-      )
-      .join('\n');
-
-    const textBlockY = 80;
-    const finalHeight = textBlockY + wrappedLines.length * 20 + 60;
-
-    const svg = `
-<svg width="500" height="${finalHeight}" viewBox="0 0 500 ${finalHeight}" xmlns="http://www.w3.org/2000/svg">
-  <rect width="100%" height="100%" fill="#111827"/>
-  <text x="50%" y="40" fill="#ffffff" font-size="22" font-family="Arial" text-anchor="middle">
-    ${username}'s GitHub Status
-  </text>
-  <text x="50%" y="${textBlockY}" fill="#00ff99" font-size="14" font-family="Arial" text-anchor="middle">
-    ${tspans}
-  </text>
-  <text x="50%" y="${finalHeight - 20}" fill="#9ca3af" font-size="14" font-family="Arial" text-anchor="middle">
-    ${totalRepos} repos · Loves ${topLanguage}
-  </text>
-</svg>
-    `.trim();
-
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, svg, 'utf-8');
-
-    return new NextResponse(svg, {
-      headers: { 'Content-Type': 'image/svg+xml' },
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    return new NextResponse(JSON.stringify({ error: message }), { status: 500 });
+    console.error('badge generation failed', error);
+    return errorResponse('Something went wrong generating this badge.', 500, theme);
   }
 }
