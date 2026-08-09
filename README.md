@@ -127,11 +127,23 @@ R2 is reached over its S3-compatible API, signed with [`aws4fetch`](https://gith
 
 ### Serving badges from the edge
 
-Turn on public access for the bucket (**R2 → bucket → Settings → Public access**) and set `R2_PUBLIC_BASE_URL` to the r2.dev subdomain it gives you, or to a custom domain:
+A freshly created bucket is private: the only way in is the signed S3 API. To let READMEs fetch badges directly, expose the bucket first.
+
+1. **R2 → your bucket → Settings.**
+2. Either enable **Public Development URL** — quickest, gives you `https://pub-<id>.r2.dev` — or add a **Custom Domain**, which is what Cloudflare recommends for production: r2.dev is rate limited and is not served through the CDN cache.
+3. Set the base URL to whichever you enabled:
 
 ```
 R2_PUBLIC_BASE_URL=https://pub-0123456789abcdef.r2.dev
 ```
+
+Then confirm an anonymous stranger actually gets an image, which is the only thing GitHub's proxy cares about:
+
+```bash
+curl "http://localhost:3000/api/debug/storage?u=<username>"
+```
+
+`publicFetch.embeddable` is the answer. A `401` there means the bucket is still private.
 
 **This is not the S3 API endpoint.** `https://<account>.r2.cloudflarestorage.com` is the authenticated API: objects genuinely live there, but every GET needs a SigV4 signature, so an anonymous fetch gets a `400` with an XML error body. GitHub's image proxy receives that instead of an image and renders nothing — the README shows bare link text and looks, misleadingly, like a broken badge rather than a broken URL. Setting it is rejected with an explanation in the logs, and the snippets fall back to this app's URL.
 
