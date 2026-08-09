@@ -2,7 +2,7 @@ import 'server-only';
 import { AwsClient } from 'aws4fetch';
 import type { Theme } from '../badge';
 import { debugLog, startTimer } from '../debug';
-import { badgeKey } from './key';
+import { badgeKey, checkPublicBaseUrl } from './key';
 
 /**
  * Cloudflare R2, addressed over its S3-compatible API.
@@ -46,8 +46,24 @@ export function isStorageConfigured(): boolean {
   );
 }
 
+let warnedAboutPublicBase: string | null = null;
+
+/**
+ * The validated public bucket URL, or null. A misconfigured value is rejected
+ * rather than passed on: the snippets built from it go straight into READMEs,
+ * where a URL that needs authentication renders as nothing at all.
+ */
 export function publicBaseUrl(): string | null {
-  return process.env.R2_PUBLIC_BASE_URL || null;
+  const raw = process.env.R2_PUBLIC_BASE_URL || null;
+  const { url, problem } = checkPublicBaseUrl(raw);
+
+  // Loud, but only once per process per distinct value.
+  if (problem && warnedAboutPublicBase !== raw) {
+    warnedAboutPublicBase = raw;
+    console.warn(`[r2] ${problem}`);
+  }
+
+  return url;
 }
 
 function getConfig(): R2Config | null {
