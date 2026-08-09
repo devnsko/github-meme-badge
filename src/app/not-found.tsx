@@ -3,14 +3,16 @@ import Link from 'next/link';
 export default function NotFound() {
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center px-5 text-center">
-      <p className="font-mono text-sm text-brand">404</p>
-      <h1 className="mt-3 text-3xl font-bold">This page never compiled</h1>
-      <p className="mt-3 text-ink-muted">
+      <p className="sticker-sm -rotate-3 bg-bubble px-4 py-1.5 font-mono text-sm font-extrabold">
+        404
+      </p>
+      <h1 className="mt-6 text-4xl font-extrabold tracking-tight">This page never compiled</h1>
+      <p className="mt-3 font-medium text-ink-soft">
         Nothing lives at that URL. The badge generator is back on the home page.
       </p>
       <Link
         href="/"
-        className="mt-8 rounded-xl bg-brand px-5 py-3 font-semibold text-canvas transition hover:bg-brand-strong"
+        className="sticker sticker-press mt-9 bg-lemon px-6 py-3 text-lg font-extrabold"
       >
         Generate a badge
       </Link>

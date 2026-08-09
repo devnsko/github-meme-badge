@@ -1,40 +1,74 @@
 @import "tailwindcss";
 
 @theme inline {
-  --color-canvas: #0a0c10;
-  --color-surface: #10141b;
-  --color-surface-2: #161b24;
-  --color-line: #232a35;
-  --color-ink: #e6edf3;
-  --color-ink-muted: #9099a8;
-  --color-brand: #3fb950;
-  --color-brand-strong: #2ea043;
+  --color-paper: #fffdf5;
+  --color-card: #ffffff;
+  --color-ink: #171412;
+  --color-ink-soft: #6b625a;
+  --color-lemon: #ffd93d;
+  --color-sky: #8be0ff;
+  --color-mint: #b8f28b;
+  --color-bubble: #ffb3c7;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 html {
-  color-scheme: dark;
+  /* The sticker look is built on a single light palette; a UA dark mode would
+     invert the paper out from under the ink outlines. */
+  color-scheme: light;
 }
 
 body {
-  background: var(--color-canvas);
+  background-color: var(--color-paper);
+  /* Faint dot grid, like a sheet of sticker paper. */
+  background-image: radial-gradient(var(--color-ink) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: -1px -1px;
   color: var(--color-ink);
   font-family: var(--font-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Ambient glow behind the hero; purely decorative. */
-.aurora::before {
-  content: "";
-  position: absolute;
-  inset: -30% 0 auto 0;
-  height: 520px;
-  background:
-    radial-gradient(45% 55% at 20% 30%, rgb(63 185 80 / 0.18), transparent 70%),
-    radial-gradient(40% 50% at 80% 20%, rgb(88 166 255 / 0.16), transparent 70%);
-  pointer-events: none;
-  z-index: -1;
+/* Every raised surface: thick ink outline plus a hard offset shadow, no blur. */
+.sticker {
+  border: 3px solid var(--color-ink);
+  border-radius: 1.25rem;
+  box-shadow: 5px 5px 0 var(--color-ink);
+}
+
+.sticker-sm {
+  border: 2.5px solid var(--color-ink);
+  border-radius: 0.875rem;
+  box-shadow: 3px 3px 0 var(--color-ink);
+}
+
+/* Presses into its own shadow on click. */
+.sticker-press {
+  transition:
+    transform 100ms ease,
+    box-shadow 100ms ease;
+}
+
+.sticker-press:hover {
+  transform: translate(1px, 1px);
+  box-shadow: 4px 4px 0 var(--color-ink);
+}
+
+.sticker-press:active {
+  transform: translate(5px, 5px);
+  box-shadow: 0 0 0 var(--color-ink);
+}
+
+.sticker-press:disabled {
+  transform: none;
+  box-shadow: 5px 5px 0 var(--color-ink);
+  opacity: 0.55;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-ink);
+  outline-offset: 3px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -44,5 +78,10 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .sticker-press:hover,
+  .sticker-press:active {
+    transform: none;
   }
 }
