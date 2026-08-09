@@ -5,6 +5,7 @@ import { THEMES, type Theme } from '@/lib/badge';
 import { publicBadgeUrl } from '@/lib/storage/key';
 import { parseUsername } from '@/lib/username';
 import { CopyField } from './CopyField';
+import { siteUrl } from '@/lib/site';
 
 const EXAMPLES = ['torvalds', 'sindresorhus', 'devnsko'];
 
@@ -210,11 +211,11 @@ export function BadgeStudio({ initialUsername = '', publicBaseUrl = null }: Badg
             <div className="grid gap-4">
               <CopyField
                 label="Markdown"
-                value={`[![${generated.username}'s GitHub meme badge](${badgeUrl})](https://github.com/${generated.username})`}
+                value={`[![${generated.username}'s GitHub meme badge](${badgeUrl})](${siteUrl})`}
               />
               <CopyField
                 label="HTML"
-                value={`<a href="https://github.com/${generated.username}"><img src="${badgeUrl}" alt="${generated.username}'s GitHub meme badge" width="480" /></a>`}
+                value={`<a href="${siteUrl}"><img src="${badgeUrl}" alt="${generated.username}'s GitHub meme badge" width="480" /></a>`}
               />
               <CopyField label="Direct URL" value={badgeUrl} />
               <p className="px-1 text-sm font-medium text-ink-soft">
