@@ -1,6 +1,6 @@
 # Meme GitHub Badge
 
-Generate a self-contained SVG badge from any GitHub profile: real stats, an inlined avatar, and a punchline that stays the same every time someone loads your README.
+Generate a self-contained SVG badge from any GitHub profile: real stats, an inlined avatar, an earned title, and a punchline that stays the same every time someone loads your README. Drawn as a paper sticker — thick ink outlines, hard offset shadows, no gradients.
 
 ```markdown
 ![My GitHub meme badge](https://your-deployment.example.com/api/badges/octocat)
@@ -16,7 +16,9 @@ A README badge is an unusual thing to serve. It is fetched by image proxies rath
 
 **The badge must be one file with no external references.** GitHub serves README images through its Camo proxy, which fetches the SVG and nothing else — an `<image href="https://…">` pointing at an avatar simply never loads. So the avatar is downloaded server-side and inlined as a base64 `data:` URI ([`src/lib/github.ts`](src/lib/github.ts)).
 
-**The badge must render outside a browser.** CSS custom properties (`var(--bg)`) are a browser feature; librsvg and resvg — used by thumbnailers, unfurlers and conversion pipelines — render an unresolved `var()` as black. Every colour is therefore written as a literal presentation attribute. The `auto` theme layers a `prefers-color-scheme` media query on top, so browsers switch to light while other renderers keep the dark defaults ([`src/lib/badge.ts`](src/lib/badge.ts)).
+**The badge must render outside a browser.** CSS custom properties (`var(--bg)`) are a browser feature; librsvg and resvg — used by thumbnailers, unfurlers and conversion pipelines — render an unresolved `var()` as black. Every colour is therefore written as a literal presentation attribute. The `auto` theme layers a `prefers-color-scheme: dark` media query on top, so browsers switch to dark while other renderers keep the light defaults ([`src/lib/badge.ts`](src/lib/badge.ts)).
+
+The same constraint shapes the sticker look: the drop shadow is a duplicated shape offset by a few pixels, not an `feDropShadow` filter, and there are no gradients. Strict renderers are also unforgiving about markup — a shape carrying both a fill role and a stroke role once emitted two `class` attributes, which browsers ignore but librsvg treats as a fatal parse error, turning the badge into a broken image everywhere except a browser. A test now walks every tag looking for duplicated attributes.
 
 **The joke must not change on every request.** The punchline is picked with an FNV-1a hash of the username rather than `Math.random()`, so a cache miss does not silently rewrite someone's README ([`src/lib/meme.ts`](src/lib/meme.ts)).
 
@@ -53,12 +55,12 @@ GET /api/badges/:username
 | Parameter | Values | Notes |
 | --- | --- | --- |
 | `:username` | GitHub login | An `@handle` or a full profile URL is accepted and normalised. |
-| `?theme` | `dark` (default), `light`, `auto` | `auto` follows the viewer's system colour scheme. |
+| `?theme` | `light` (default), `dark`, `auto` | `auto` follows the viewer's system colour scheme. |
 
 Responds with `image/svg+xml`. Errors are rendered *as a badge* rather than as JSON — the endpoint is consumed by `<img>`, where a JSON body shows up as a broken-image icon with no explanation. The HTTP status is still accurate (`400`, `404`, `429`, `504`, `500`), and `ETag` / `If-None-Match` are honoured.
 
 ```bash
-curl "http://localhost:3000/api/badges/octocat?theme=light"
+curl "http://localhost:3000/api/badges/octocat?theme=dark"
 ```
 
 ### Caching and limits

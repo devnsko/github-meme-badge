@@ -70,8 +70,38 @@ describe('renderBadge', () => {
   });
 
   it('paints each theme with literal colours', () => {
-    expect(renderBadge(stats(), 'dark')).toContain('fill="#0d1117"');
-    expect(renderBadge(stats(), 'light')).toContain('fill="#ffffff"');
+    expect(renderBadge(stats(), 'light')).toContain('fill="#fffdf5"');
+    expect(renderBadge(stats(), 'dark')).toContain('fill="#2a2733"');
+  });
+
+  it('defaults to the light theme', () => {
+    expect(renderBadge(stats())).toBe(renderBadge(stats(), 'light'));
+  });
+
+  it('emits no element with a duplicated attribute', () => {
+    // A shape carrying both a fill role and a stroke role once produced two
+    // `class` attributes. Browsers ignore the second; librsvg rejects the
+    // entire document, so the badge became a broken image everywhere else.
+    for (const theme of ['light', 'dark', 'auto'] as const) {
+      const svg = renderBadge(stats({ avatarDataUri: 'data:image/png;base64,aGVsbG8=' }), theme);
+
+      for (const [, tag] of svg.matchAll(/<([a-zA-Z]+[^>]*?)\/?>/g)) {
+        const names = [...tag.matchAll(/(?:^|\s)([a-zA-Z-:]+)=/g)].map((match) => match[1]);
+        expect(new Set(names).size, `duplicate attribute in <${tag.slice(0, 60)}…>`).toBe(
+          names.length,
+        );
+      }
+    }
+  });
+
+  it('draws the sticker outline and hard shadow without filters', () => {
+    const svg = renderBadge(stats());
+    expect(svg).toContain('stroke-width="3"');
+    // A blur filter is the one thing librsvg/resvg handle inconsistently, so
+    // the shadow is a plain offset shape instead.
+    expect(svg).not.toContain('<filter');
+    expect(svg).not.toContain('feDropShadow');
+    expect(svg).not.toContain('<linearGradient');
   });
 
   it('never emits a CSS custom property', () => {
@@ -82,12 +112,12 @@ describe('renderBadge', () => {
     }
   });
 
-  it('ships auto as dark plus a light media query', () => {
+  it('ships auto as light plus a dark media query', () => {
     const svg = renderBadge(stats(), 'auto');
     // Renderers that ignore the media query must still get a readable badge.
-    expect(svg).toContain('fill="#0d1117"');
-    expect(svg).toContain('@media (prefers-color-scheme:light)');
-    expect(svg).toContain('.tx{fill:#1f2328}');
+    expect(svg).toContain('fill="#fffdf5"');
+    expect(svg).toContain('@media (prefers-color-scheme:dark)');
+    expect(svg).toContain('.tx{fill:#fffdf5}');
   });
 
   it('renders the earned title on the card', () => {
@@ -95,10 +125,10 @@ describe('renderBadge', () => {
     const score = scoreProfile(fixture);
     const { title } = buildMeme(fixture, score);
 
-    const svg = renderBadge(fixture, 'dark', score);
+    const svg = renderBadge(fixture, 'light', score);
     expect(svg).toContain(`>${title}<`);
-    // The title pill carries the accent colour, not the tagline.
-    expect(svg).toContain('fill="#12261a"');
+    // The title sticker carries the loudest fill on the card.
+    expect(svg).toContain('fill="#ffd93d"');
   });
 
   it('gives a dormant account a dormant title', () => {
