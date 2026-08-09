@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { after } from 'next/server';
-import { isTheme, renderBadge, renderErrorBadge, type Theme } from '@/lib/badge';
+import { DEFAULT_THEME, isTheme, renderBadge, renderErrorBadge, type Theme } from '@/lib/badge';
 import { fetchStats, GitHubError } from '@/lib/github';
 import { clientKey, rateLimit } from '@/lib/rate-limit';
 import { scoreProfile } from '@/lib/scoring';
@@ -66,7 +66,7 @@ export async function GET(
 ) {
   const theme = (() => {
     const requested = new URL(request.url).searchParams.get('theme');
-    return isTheme(requested) ? requested : 'dark';
+    return isTheme(requested) ? requested : DEFAULT_THEME;
   })();
 
   const { username: raw } = await params;

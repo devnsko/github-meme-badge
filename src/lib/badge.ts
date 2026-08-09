@@ -3,8 +3,11 @@ import { buildMeme } from './meme';
 import { scoreProfile, type ProfileScore } from './scoring';
 import { formatCount, measureText, truncate, wrapText } from './text';
 
-export const THEMES = ['dark', 'light', 'auto'] as const;
+export const THEMES = ['light', 'dark', 'auto'] as const;
 export type Theme = (typeof THEMES)[number];
+
+/** Used by the renderer and by the route that parses `?theme=`. */
+export const DEFAULT_THEME: Theme = 'light';
 
 export function isTheme(value: string | null | undefined): value is Theme {
   return !!value && (THEMES as readonly string[]).includes(value);
@@ -13,37 +16,48 @@ export function isTheme(value: string | null | undefined): value is Theme {
 /**
  * Colour roles. Each one doubles as a CSS class so the `auto` theme can
  * override it from a media query.
+ *
+ * The look is a paper sticker: a thick ink outline, a hard offset shadow with
+ * no blur, and flat fills. Nothing here uses a filter or a gradient, so it
+ * survives the non-browser rasterisers that render README images.
  */
-type Role = 'bg' | 'bd' | 'tx' | 'mu' | 'ac' | 'acBg' | 'pill' | 'pillTx';
+type Role = 'bg' | 'ink' | 'sh' | 'tx' | 'mu' | 'ac' | 'acTx' | 'pill' | 'pillTx';
 type Palette = Record<Role, string>;
 
-const PALETTES: Record<'dark' | 'light', Palette> = {
-  dark: {
-    bg: '#0d1117',
-    bd: '#30363d',
-    tx: '#e6edf3',
-    mu: '#8b949e',
-    ac: '#3fb950',
-    acBg: '#12261a',
-    pill: '#21262d',
-    pillTx: '#79c0ff',
-  },
+const PALETTES: Record<'light' | 'dark', Palette> = {
   light: {
-    bg: '#ffffff',
-    bd: '#d0d7de',
-    tx: '#1f2328',
-    mu: '#59636e',
-    ac: '#1a7f37',
-    acBg: '#dafbe1',
-    pill: '#f0f3f6',
-    pillTx: '#0969da',
+    bg: '#fffdf5',
+    ink: '#171412',
+    sh: '#171412',
+    tx: '#171412',
+    mu: '#6b625a',
+    ac: '#ffd93d',
+    acTx: '#171412',
+    pill: '#8be0ff',
+    pillTx: '#171412',
+  },
+  dark: {
+    bg: '#2a2733',
+    ink: '#0b0a0e',
+    sh: '#0b0a0e',
+    tx: '#fffdf5',
+    mu: '#a79fb4',
+    ac: '#ffd93d',
+    acTx: '#171412',
+    pill: '#8be0ff',
+    pillTx: '#171412',
   },
 };
 
 const WIDTH = 480;
-const PADDING = 22;
-const INNER = WIDTH - PADDING * 2;
-const AVATAR = 52;
+/** Hard shadow offset. The card is inset by this much so nothing is clipped. */
+const SHADOW = 6;
+const OUTLINE = 3;
+const CARD_WIDTH = WIDTH - SHADOW;
+const PADDING = 24;
+const INNER = CARD_WIDTH - PADDING * 2;
+const AVATAR = 54;
+const CARD_RADIUS = 22;
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
 const XML_ESCAPES: Record<string, string> = {
@@ -77,24 +91,47 @@ function safeDataUri(value: string | null): string | null {
  * to survive rasterisers such as librsvg and resvg, which render an unresolved
  * `var()` as black.
  *
- * `auto` layers a `prefers-color-scheme` rule on top. Any CSS declaration wins
- * over a presentation attribute, so browsers switch to light while renderers
- * that ignore the rule keep the dark defaults.
+ * `auto` layers a `prefers-color-scheme: dark` rule on top. Any CSS declaration
+ * wins over a presentation attribute, so browsers switch to dark while
+ * renderers that ignore the rule keep the light defaults.
  */
-function paint(palette: Palette, fill: Role, stroke?: Role): string {
-  const classes = stroke ? `${fill} ${stroke}` : fill;
-  const strokeAttr = stroke ? ` stroke="${palette[stroke]}"` : '';
-  return ` fill="${palette[fill]}"${strokeAttr} class="${classes}"`;
+function paint(
+  palette: Palette,
+  opts: { fill?: Role | 'none'; stroke?: Role; strokeWidth?: number },
+): string {
+  const attrs: string[] = [];
+  const classes: Role[] = [];
+
+  if (opts.fill === 'none') {
+    attrs.push('fill="none"');
+  } else if (opts.fill) {
+    attrs.push(`fill="${palette[opts.fill]}"`);
+    classes.push(opts.fill);
+  }
+
+  if (opts.stroke) {
+    attrs.push(`stroke="${palette[opts.stroke]}"`, `stroke-width="${opts.strokeWidth ?? OUTLINE}"`);
+    classes.push(opts.stroke);
+  }
+
+  // One `class` attribute, always: emitting fill and stroke separately produced
+  // two of them on outlined shapes, which is malformed XML. Browsers shrug it
+  // off; librsvg rejects the whole document.
+  if (classes.length) attrs.push(`class="${classes.join(' ')}"`);
+
+  return ` ${attrs.join(' ')}`;
 }
 
+const fill = (palette: Palette, role: Role) => paint(palette, { fill: role });
+
 function autoThemeStyle(): string {
-  const light = PALETTES.light;
-  const fills = (Object.keys(light) as Role[])
-    .filter((role) => role !== 'bd')
-    .map((role) => `.${role}{fill:${light[role]}}`)
+  const dark = PALETTES.dark;
+  const fills = (Object.keys(dark) as Role[])
+    .filter((role) => role !== 'ink')
+    .map((role) => `.${role}{fill:${dark[role]}}`)
     .join('');
 
-  return `<style>@media (prefers-color-scheme:light){${fills}.bd{stroke:${light.bd}}}</style>`;
+  return `<style>@media (prefers-color-scheme:dark){${fills}.ink{stroke:${dark.ink}}}</style>`;
 }
 
 function textNode(
@@ -105,24 +142,30 @@ function textNode(
     size: number;
     role: Role;
     palette: Palette;
-    bold?: boolean;
+    weight?: number;
     anchor?: string;
   },
 ): string {
   const anchor = opts.anchor ? ` text-anchor="${opts.anchor}"` : '';
-  const weight = opts.bold ? ' font-weight="600"' : '';
+  const weight = ` font-weight="${opts.weight ?? 500}"`;
   const x = Number(opts.x.toFixed(2));
-  return `<text x="${x}" y="${opts.y}" font-size="${opts.size}"${paint(opts.palette, opts.role)}${weight}${anchor}>${escapeXml(content)}</text>`;
+  return `<text x="${x}" y="${opts.y}" font-size="${opts.size}"${fill(opts.palette, opts.role)}${weight}${anchor}>${escapeXml(content)}</text>`;
 }
 
 function avatarNode(stats: GitHubStats, palette: Palette, x: number, y: number): string {
   const href = safeDataUri(stats.avatarDataUri);
   const r = AVATAR / 2;
-  const ring = `<circle cx="${x + r}" cy="${y + r}" r="${r}" fill="none" stroke="${palette.bd}" stroke-width="1" class="bd"/>`;
+  const cx = x + r;
+  const cy = y + r;
+
+  // The shadow sits under the avatar exactly as it does under the card.
+  const shadow = `<circle cx="${cx + SHADOW / 2}" cy="${cy + SHADOW / 2}" r="${r}"${fill(palette, 'sh')}/>`;
+  const ring = `<circle cx="${cx}" cy="${cy}" r="${r - OUTLINE / 2}"${paint(palette, { fill: 'none', stroke: 'ink' })}/>`;
 
   if (href) {
     return [
-      `<clipPath id="avatar"><circle cx="${x + r}" cy="${y + r}" r="${r}"/></clipPath>`,
+      shadow,
+      `<clipPath id="avatar"><circle cx="${cx}" cy="${cy}" r="${r}"/></clipPath>`,
       `<image href="${href}" x="${x}" y="${y}" width="${AVATAR}" height="${AVATAR}" clip-path="url(#avatar)" preserveAspectRatio="xMidYMid slice"/>`,
       ring,
     ].join('');
@@ -130,22 +173,26 @@ function avatarNode(stats: GitHubStats, palette: Palette, x: number, y: number):
 
   const initial = stats.displayName.trim().charAt(0).toUpperCase() || '?';
   return [
-    `<circle cx="${x + r}" cy="${y + r}" r="${r}"${paint(palette, 'pill')}/>`,
+    shadow,
+    `<circle cx="${cx}" cy="${cy}" r="${r}"${fill(palette, 'pill')}/>`,
     textNode(initial, {
-      x: x + r,
-      y: y + r + 7,
-      size: 22,
+      x: cx,
+      y: cy + 8,
+      size: 24,
       role: 'pillTx',
       palette,
-      bold: true,
+      weight: 800,
       anchor: 'middle',
     }),
     ring,
   ].join('');
 }
 
-/** Rounded tag. `align: 'right'` anchors it to `x` as a right edge instead. */
-function pillNode(
+/**
+ * An outlined sticker with its own hard shadow, optionally tilted — the small
+ * rotation is what stops the card reading as a plain rounded rectangle.
+ */
+function stickerNode(
   label: string,
   palette: Palette,
   opts: {
@@ -153,30 +200,38 @@ function pillNode(
     y: number;
     bg: Role;
     fg: Role;
-    size?: number;
-    maxWidth?: number;
+    size: number;
+    maxWidth: number;
     align?: 'left' | 'right';
+    tilt?: number;
   },
 ): string {
-  const size = opts.size ?? 11.5;
-  const text = truncate(label, opts.maxWidth ?? 110, size);
+  const text = truncate(label, opts.maxWidth, opts.size);
+  const height = Math.round(opts.size * 2.3);
   // A one-letter language such as "C" would otherwise collapse into a dot.
-  const width = Number(Math.max(measureText(text, size, true) + 22, 54).toFixed(1));
-  const height = Math.round(size * 1.9);
+  const width = Number(Math.max(measureText(text, opts.size, true) + opts.size * 2, 58).toFixed(1));
   const x = Number((opts.align === 'right' ? opts.x - width : opts.x).toFixed(1));
+  const radius = height / 2;
 
-  return [
-    `<rect x="${x}" y="${opts.y}" width="${width}" height="${height}" rx="${height / 2}"${paint(palette, opts.bg)}/>`,
+  const body = [
+    `<rect x="${x + SHADOW / 2}" y="${opts.y + SHADOW / 2}" width="${width}" height="${height}" rx="${radius}"${fill(palette, 'sh')}/>`,
+    `<rect x="${x}" y="${opts.y}" width="${width}" height="${height}" rx="${radius}"${paint(palette, { fill: opts.bg, stroke: 'ink' })}/>`,
     textNode(text, {
       x: x + width / 2,
-      y: opts.y + height / 2 + size * 0.36,
-      size,
+      y: opts.y + height / 2 + opts.size * 0.36,
+      size: opts.size,
       role: opts.fg,
       palette,
-      bold: true,
+      weight: 800,
       anchor: 'middle',
     }),
   ].join('');
+
+  if (!opts.tilt) return body;
+
+  const cx = Number((x + width / 2).toFixed(1));
+  const cy = Number((opts.y + height / 2).toFixed(1));
+  return `<g transform="rotate(${opts.tilt} ${cx} ${cy})">${body}</g>`;
 }
 
 function statsRow(stats: GitHubStats, palette: Palette, y: number): string {
@@ -193,19 +248,23 @@ function statsRow(stats: GitHubStats, palette: Palette, y: number): string {
     .map(([value, label], i) => {
       const centre = PADDING + columnWidth * i + columnWidth / 2;
       return [
-        textNode(value, { x: centre, y, size: 16, role: 'tx', palette, bold: true, anchor: 'middle' }),
-        textNode(label, { x: centre, y: y + 15, size: 10, role: 'mu', palette, anchor: 'middle' }),
+        textNode(value, { x: centre, y, size: 19, role: 'tx', palette, weight: 800, anchor: 'middle' }),
+        textNode(label, { x: centre, y: y + 16, size: 10.5, role: 'mu', palette, weight: 600, anchor: 'middle' }),
       ].join('');
     })
     .join('');
 }
 
 function document(height: number, theme: Theme, title: string, palette: Palette, body: string): string {
+  const cardHeight = height - SHADOW;
+
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${height}" viewBox="0 0 ${WIDTH} ${height}" role="img" aria-labelledby="badge-title">`,
     `<title id="badge-title">${escapeXml(title)}</title>`,
     theme === 'auto' ? autoThemeStyle() : '',
-    `<rect x="0.5" y="0.5" width="${WIDTH - 1}" height="${height - 1}" rx="12"${paint(palette, 'bg', 'bd')}/>`,
+    // Hard offset shadow, then the card itself on top of it.
+    `<rect x="${SHADOW}" y="${SHADOW}" width="${CARD_WIDTH - OUTLINE}" height="${cardHeight - OUTLINE}" rx="${CARD_RADIUS}"${fill(palette, 'sh')}/>`,
+    `<rect x="${OUTLINE / 2}" y="${OUTLINE / 2}" width="${CARD_WIDTH - OUTLINE}" height="${cardHeight - OUTLINE}" rx="${CARD_RADIUS}"${paint(palette, { fill: 'bg', stroke: 'ink' })}/>`,
     // font-family inherits, so it is declared once rather than per node.
     `<g font-family="${FONT}">${body}</g>`,
     '</svg>',
@@ -214,68 +273,78 @@ function document(height: number, theme: Theme, title: string, palette: Palette,
 
 export function renderBadge(
   stats: GitHubStats,
-  theme: Theme = 'dark',
+  theme: Theme = DEFAULT_THEME,
   score: ProfileScore = scoreProfile(stats),
 ): string {
-  // `auto` renders dark by default and lets the media query swap it.
-  const palette = PALETTES[theme === 'light' ? 'light' : 'dark'];
+  // `auto` renders light by default and lets the media query swap it.
+  const palette = PALETTES[theme === 'dark' ? 'dark' : 'light'];
   const meme = buildMeme(stats, score);
 
-  const nameWidth = INNER - AVATAR - 16 - 130;
-  const name = truncate(stats.displayName, nameWidth, 17);
-  const handle = truncate(`@${stats.username}`, nameWidth, 12.5);
+  const nameWidth = INNER - AVATAR - 18 - 132;
+  const name = truncate(stats.displayName, nameWidth, 19);
+  const handle = truncate(`@${stats.username}`, nameWidth, 13);
 
-  const taglineLines = wrapText(meme.tagline, INNER, 14, 2);
+  const taglineLines = wrapText(meme.tagline, INNER, 14.5, 2);
   const punchlineLines = wrapText(meme.punchline, INNER, 13, 2);
 
   const parts: string[] = [
     avatarNode(stats, palette, PADDING, PADDING),
-    textNode(name, { x: PADDING + AVATAR + 14, y: PADDING + 22, size: 17, role: 'tx', palette, bold: true }),
-    textNode(handle, { x: PADDING + AVATAR + 14, y: PADDING + 41, size: 12.5, role: 'mu', palette }),
-    // The earned title is the headline of the card, so it gets the accent.
-    pillNode(meme.title, palette, {
-      x: PADDING,
-      y: PADDING + AVATAR + 12,
-      bg: 'acBg',
-      fg: 'ac',
-      size: 12.5,
-      maxWidth: INNER - 20,
-    }),
+    textNode(name, { x: PADDING + AVATAR + 18, y: PADDING + 24, size: 19, role: 'tx', palette, weight: 800 }),
+    textNode(handle, { x: PADDING + AVATAR + 18, y: PADDING + 45, size: 13, role: 'mu', palette, weight: 600 }),
   ];
 
   if (stats.topLanguage) {
     parts.push(
-      pillNode(stats.topLanguage, palette, {
-        x: WIDTH - PADDING,
-        y: PADDING + 15,
+      stickerNode(stats.topLanguage, palette, {
+        x: CARD_WIDTH - PADDING,
+        y: PADDING + 10,
         bg: 'pill',
         fg: 'pillTx',
+        size: 12,
+        maxWidth: 108,
         align: 'right',
+        tilt: 3,
       }),
     );
   }
 
-  let y = PADDING + AVATAR + 12 + 24 + 24;
+  // The earned title is the headline of the card, so it gets the loudest fill.
+  const titleY = PADDING + AVATAR + 16;
+  const titleHeight = Math.round(13.5 * 2.3);
+  parts.push(
+    stickerNode(meme.title, palette, {
+      x: PADDING + 4,
+      y: titleY,
+      bg: 'ac',
+      fg: 'acTx',
+      size: 13.5,
+      maxWidth: INNER - 40,
+      tilt: -2,
+    }),
+  );
+
+  let y = titleY + titleHeight + 30;
   for (const line of taglineLines) {
-    parts.push(textNode(line, { x: PADDING, y, size: 14, role: 'tx', palette, bold: true }));
-    y += 19;
+    parts.push(textNode(line, { x: PADDING, y, size: 14.5, role: 'tx', palette, weight: 700 }));
+    y += 20;
   }
 
   y += 3;
   for (const line of punchlineLines) {
-    parts.push(textNode(line, { x: PADDING, y, size: 13, role: 'mu', palette }));
+    parts.push(textNode(line, { x: PADDING, y, size: 13, role: 'mu', palette, weight: 500 }));
     y += 18;
   }
 
-  y += 10;
+  // A perforated line, like the cut edge of a sticker sheet.
+  y += 14;
   parts.push(
-    `<line x1="${PADDING}" y1="${y}" x2="${WIDTH - PADDING}" y2="${y}" stroke="${palette.bd}" class="bd"/>`,
+    `<line x1="${PADDING}" y1="${y}" x2="${CARD_WIDTH - PADDING}" y2="${y}" stroke="${palette.ink}" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="1 9" class="ink"/>`,
   );
 
-  y += 24;
+  y += 28;
   parts.push(statsRow(stats, palette, y));
 
-  const height = Math.round(y + 15 + PADDING);
+  const height = Math.round(y + 16 + PADDING + SHADOW);
   return document(height, theme, `${stats.displayName}'s GitHub meme badge`, palette, parts.join(''));
 }
 
@@ -283,14 +352,22 @@ export function renderBadge(
  * Errors are rendered as a badge too: the endpoint is consumed as an image, so
  * a JSON body would show up as a broken-image icon with no explanation.
  */
-export function renderErrorBadge(message: string, theme: Theme = 'dark'): string {
-  const palette = PALETTES[theme === 'light' ? 'light' : 'dark'];
-  const height = 96;
+export function renderErrorBadge(message: string, theme: Theme = DEFAULT_THEME): string {
+  const palette = PALETTES[theme === 'dark' ? 'dark' : 'light'];
+  const height = 118;
 
   const parts = [
-    textNode('Badge unavailable', { x: PADDING, y: 34, size: 15, role: 'tx', palette, bold: true }),
+    stickerNode('Badge unavailable', palette, {
+      x: PADDING,
+      y: 22,
+      bg: 'ac',
+      fg: 'acTx',
+      size: 13.5,
+      maxWidth: INNER - 40,
+      tilt: -2,
+    }),
     ...wrapText(message, INNER, 13, 2).map((line, i) =>
-      textNode(line, { x: PADDING, y: 58 + i * 17, size: 13, role: 'mu', palette }),
+      textNode(line, { x: PADDING, y: 84 + i * 18, size: 13, role: 'mu', palette, weight: 500 }),
     ),
   ];
 

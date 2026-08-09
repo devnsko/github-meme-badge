@@ -14,6 +14,9 @@ const STATUS_MESSAGES: Record<number, string> = {
   504: 'GitHub is being slow right now. Try again shortly.',
 };
 
+/** Each example gets its own sticker colour, cycled by position. */
+const EXAMPLE_COLOURS = ['bg-sky', 'bg-mint', 'bg-bubble'];
+
 type Status = 'idle' | 'loading' | 'ready' | 'error';
 
 interface Generated {
@@ -24,7 +27,7 @@ interface Generated {
 
 export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string }) {
   const [input, setInput] = useState(initialUsername);
-  const [theme, setTheme] = useState<Theme>('dark');
+  const [theme, setTheme] = useState<Theme>('light');
   const [generated, setGenerated] = useState<Generated | null>(null);
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +48,7 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
       return;
     }
 
-    const path = `/api/badges/${username}${nextTheme === 'dark' ? '' : `?theme=${nextTheme}`}`;
+    const path = `/api/badges/${username}${nextTheme === 'light' ? '' : `?theme=${nextTheme}`}`;
     const id = ++requestId.current;
 
     setStatus('loading');
@@ -78,7 +81,7 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
 
   // Honour a shared ?u= link on first paint.
   useEffect(() => {
-    if (initialUsername) void generate(initialUsername, 'dark');
+    if (initialUsername) void generate(initialUsername, 'light');
   }, [initialUsername, generate]);
 
   const onSubmit = (event: React.FormEvent) => {
@@ -95,7 +98,7 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
 
   return (
     <div className="w-full">
-      <form onSubmit={onSubmit} className="flex flex-col gap-3 sm:flex-row">
+      <form onSubmit={onSubmit} className="flex flex-col gap-4 sm:flex-row">
         <label htmlFor="username" className="sr-only">
           GitHub username
         </label>
@@ -108,31 +111,33 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
           autoComplete="off"
           autoCapitalize="off"
           spellCheck={false}
-          className="flex-1 rounded-xl border border-line bg-surface px-4 py-3 text-ink placeholder:text-ink-muted/70 focus:border-brand focus:outline-none"
+          className="sticker flex-1 bg-card px-5 py-3.5 text-lg font-bold placeholder:font-medium placeholder:text-ink-soft/60 focus:outline-none"
         />
         <button
           type="submit"
           disabled={status === 'loading'}
-          className="rounded-xl bg-brand px-6 py-3 font-semibold text-canvas transition hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+          className="sticker sticker-press bg-lemon px-7 py-3.5 text-lg font-extrabold disabled:cursor-not-allowed"
         >
           {status === 'loading' ? 'Generating…' : 'Generate badge'}
         </button>
       </form>
 
-      <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm">
-        <div role="group" aria-label="Theme" className="flex items-center gap-2">
-          <span className="text-ink-muted" aria-hidden>
+      <div className="mt-5 flex flex-wrap items-center gap-x-7 gap-y-4">
+        <div role="group" aria-label="Theme" className="flex items-center gap-2.5">
+          <span className="text-sm font-extrabold uppercase tracking-wide" aria-hidden>
             Theme
           </span>
-          <div className="flex rounded-lg border border-line bg-surface p-0.5">
+          <div className="sticker-sm flex gap-1 bg-card p-1">
             {THEMES.map((option) => (
               <button
                 key={option}
                 type="button"
                 aria-pressed={theme === option}
                 onClick={() => onThemeChange(option)}
-                className={`rounded-md px-3 py-1 capitalize transition ${
-                  theme === option ? 'bg-line text-ink' : 'text-ink-muted hover:text-ink'
+                className={`rounded-lg px-3 py-1 text-sm font-bold capitalize transition ${
+                  theme === option
+                    ? 'border-2 border-ink bg-lemon'
+                    : 'border-2 border-transparent hover:bg-paper'
                 }`}
               >
                 {option}
@@ -141,9 +146,9 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-ink-muted">
-          <span>Try</span>
-          {EXAMPLES.map((example) => (
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className="text-sm font-extrabold uppercase tracking-wide">Try</span>
+          {EXAMPLES.map((example, i) => (
             <button
               key={example}
               type="button"
@@ -151,7 +156,7 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
                 setInput(example);
                 void generate(example, theme);
               }}
-              className="rounded-md px-2 py-1 font-mono text-xs text-ink-muted underline decoration-line underline-offset-4 transition hover:text-brand"
+              className={`sticker-sm sticker-press px-3 py-1 font-mono text-sm font-bold ${EXAMPLE_COLOURS[i % EXAMPLE_COLOURS.length]}`}
             >
               {example}
             </button>
@@ -161,15 +166,13 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
 
       <div aria-live="polite" className="mt-6">
         {error && (
-          <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            {error}
-          </p>
+          <p className="sticker bg-bubble px-5 py-3.5 font-bold">{error}</p>
         )}
       </div>
 
       {generated && (
-        <section className="mt-6 flex flex-col gap-6">
-          <div className="flex justify-center rounded-2xl border border-line bg-surface p-6">
+        <section className="mt-7 flex flex-col gap-7">
+          <div className="sticker flex justify-center bg-card p-6">
             {/* A plain <img> on purpose: the badge is a dynamic SVG endpoint of
                 unknown height, which next/image cannot optimise anyway. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -178,12 +181,12 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
               src={generated.path}
               alt={`GitHub meme badge for ${generated.username}`}
               width={480}
-              className="max-w-full rounded-xl"
+              className="max-w-full"
             />
           </div>
 
           {status === 'ready' && (
-            <div className="grid gap-3">
+            <div className="grid gap-4">
               <CopyField
                 label="Markdown"
                 value={`[![${generated.username}'s GitHub meme badge](${badgeUrl})](https://github.com/${generated.username})`}

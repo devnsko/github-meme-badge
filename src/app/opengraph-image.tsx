@@ -5,6 +5,8 @@ export const alt = site.title;
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
+const INK = '#171412';
+
 export default function OpenGraphImage() {
   return new ImageResponse(
     (
@@ -16,21 +18,48 @@ export default function OpenGraphImage() {
           flexDirection: 'column',
           justifyContent: 'center',
           padding: '80px',
-          background: '#0a0c10',
-          color: '#e6edf3',
+          background: '#fffdf5',
+          color: INK,
         }}
       >
-        <div style={{ display: 'flex', fontSize: 26, color: '#3fb950', letterSpacing: 2 }}>
-          SVG BADGES FOR YOUR README
+        <div
+          style={{
+            display: 'flex',
+            alignSelf: 'flex-start',
+            padding: '10px 26px',
+            marginBottom: 40,
+            fontSize: 26,
+            fontWeight: 800,
+            letterSpacing: 2,
+            background: '#ffb3c7',
+            border: `5px solid ${INK}`,
+            borderRadius: 999,
+            boxShadow: `9px 9px 0 ${INK}`,
+            transform: 'rotate(-2deg)',
+          }}
+        >
+          STICKERS FOR YOUR README
         </div>
-        <div style={{ display: 'flex', marginTop: 24, fontSize: 76, fontWeight: 700, lineHeight: 1.1 }}>
+        <div style={{ display: 'flex', fontSize: 82, fontWeight: 800, lineHeight: 1.1 }}>
           Your GitHub stats,
         </div>
-        <div style={{ display: 'flex', fontSize: 76, fontWeight: 700, color: '#58a6ff', lineHeight: 1.1 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignSelf: 'flex-start',
+            marginTop: 12,
+            padding: '6px 22px',
+            fontSize: 82,
+            fontWeight: 800,
+            lineHeight: 1.1,
+            background: '#ffd93d',
+            border: `5px solid ${INK}`,
+            borderRadius: 20,
+            boxShadow: `9px 9px 0 ${INK}`,
+            transform: 'rotate(-1deg)',
+          }}
+        >
           with a punchline
-        </div>
-        <div style={{ display: 'flex', marginTop: 32, fontSize: 30, color: '#9099a8' }}>
-          {site.name}
         </div>
       </div>
     ),
