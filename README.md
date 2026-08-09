@@ -125,7 +125,29 @@ Create a bucket and an R2 API token with **Object Read & Write**, then set `R2_A
 
 R2 is reached over its S3-compatible API, signed with [`aws4fetch`](https://github.com/mhart/aws4fetch) (~4kB over plain `fetch`) rather than the AWS SDK, which would add megabytes to a serverless bundle for one PUT and one GET. `R2_ENDPOINT` points the same code at any S3-compatible store, which is how the integration tests run against a local stub — and how you can run against MinIO locally.
 
-To serve badges from the edge, make the bucket public (r2.dev or a custom domain) and set `R2_PUBLIC_BASE_URL`. The snippets switch over automatically.
+### Serving badges from the edge
+
+A freshly created bucket is private: the only way in is the signed S3 API. To let READMEs fetch badges directly, expose the bucket first.
+
+1. **R2 → your bucket → Settings.**
+2. Either enable **Public Development URL** — quickest, gives you `https://pub-<id>.r2.dev` — or add a **Custom Domain**, which is what Cloudflare recommends for production: r2.dev is rate limited and is not served through the CDN cache.
+3. Set the base URL to whichever you enabled:
+
+```
+R2_PUBLIC_BASE_URL=https://pub-0123456789abcdef.r2.dev
+```
+
+Then confirm an anonymous stranger actually gets an image, which is the only thing GitHub's proxy cares about:
+
+```bash
+curl "http://localhost:3000/api/debug/storage?u=<username>"
+```
+
+`publicFetch.embeddable` is the answer. A `401` there means the bucket is still private.
+
+**This is not the S3 API endpoint.** `https://<account>.r2.cloudflarestorage.com` is the authenticated API: objects genuinely live there, but every GET needs a SigV4 signature, so an anonymous fetch gets a `400` with an XML error body. GitHub's image proxy receives that instead of an image and renders nothing — the README shows bare link text and looks, misleadingly, like a broken badge rather than a broken URL. Setting it is rejected with an explanation in the logs, and the snippets fall back to this app's URL.
+
+Note also that neither a r2.dev subdomain nor a custom domain includes the bucket name in the path; the host already identifies the bucket.
 
 One wrinkle worth knowing about: the request is signed and issued in two steps rather than through `AwsClient.fetch`. That helper passes its signed `Request` straight to `fetch`, and a Request's body is a stream — undici then sends it chunked with no `Content-Length`, and R2 answers `411 Length Required`. Signing separately and handing the raw string body to `fetch` lets the runtime compute the length itself.
 

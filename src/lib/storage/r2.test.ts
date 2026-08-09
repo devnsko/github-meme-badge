@@ -68,4 +68,13 @@ describe('storage without R2 configured', () => {
     process.env.R2_PUBLIC_BASE_URL = 'https://cdn.example.com';
     expect(publicBaseUrl()).toBe('https://cdn.example.com');
   });
+
+  it('refuses a public base URL that points at the signed S3 endpoint', () => {
+    process.env.R2_PUBLIC_BASE_URL = 'https://acct.r2.cloudflarestorage.com/github-badges';
+
+    // Falling back to null makes the studio serve app URLs, which work, rather
+    // than a Cloudflare URL that renders as nothing inside a README.
+    expect(publicBaseUrl()).toBeNull();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('r2.dev'));
+  });
 });
