@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { BadgeStudio } from '@/components/BadgeStudio';
 import { site } from '@/lib/site';
+import { publicBaseUrl } from '@/lib/storage/r2';
 import { parseUsername } from '@/lib/username';
 
 interface PageProps {
@@ -47,9 +48,9 @@ const PARAMS = [
 
 export default async function Home({ searchParams }: PageProps) {
   const initialUsername = parseUsername((await searchParams).u ?? '') ?? '';
-  // Public bucket URL, when there is one. Safe to hand to the browser: it is
-  // the address READMEs are meant to point at.
-  const publicBaseUrl = process.env.R2_PUBLIC_BASE_URL || null;
+  // Validated public bucket URL, when there is one. Safe to hand to the
+  // browser: it is the address READMEs are meant to point at.
+  const publicBase = publicBaseUrl();
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col px-5 py-14 sm:py-20">
@@ -70,7 +71,7 @@ export default async function Home({ searchParams }: PageProps) {
       </header>
 
       <section className="mt-10" aria-label="Badge generator">
-        <BadgeStudio initialUsername={initialUsername} publicBaseUrl={publicBaseUrl} />
+        <BadgeStudio initialUsername={initialUsername} publicBaseUrl={publicBase} />
       </section>
 
       <section className="mt-20 grid gap-6 sm:grid-cols-3" aria-label="How it works">

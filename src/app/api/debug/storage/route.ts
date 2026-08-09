@@ -1,6 +1,6 @@
 import { DEFAULT_THEME, isTheme } from '@/lib/badge';
 import { debugEnabled } from '@/lib/debug';
-import { badgeKey, publicBadgeUrl } from '@/lib/storage/key';
+import { badgeKey, checkPublicBaseUrl, publicBadgeUrl } from '@/lib/storage/key';
 import { BADGE_TTL_MS, isStorageConfigured, publicBaseUrl, readStoredBadge } from '@/lib/storage/r2';
 import { parseUsername } from '@/lib/username';
 
@@ -29,12 +29,15 @@ export async function GET(request: Request) {
 
   const base = publicBaseUrl();
   const configured = isStorageConfigured();
+  const { problem } = checkPublicBaseUrl(process.env.R2_PUBLIC_BASE_URL);
 
   const body: Record<string, unknown> = {
     configured,
     bucket: process.env.R2_BUCKET ?? null,
     endpointOverridden: Boolean(process.env.R2_ENDPOINT),
     publicBaseUrl: base,
+    // Surfaces a public URL that would render as bare link text in a README.
+    publicBaseUrlProblem: problem,
     ttlHours: BADGE_TTL_MS / 3_600_000,
     debugLogging: debugEnabled,
   };
