@@ -47,6 +47,9 @@ const PARAMS = [
 
 export default async function Home({ searchParams }: PageProps) {
   const initialUsername = parseUsername((await searchParams).u ?? '') ?? '';
+  // Public bucket URL, when there is one. Safe to hand to the browser: it is
+  // the address READMEs are meant to point at.
+  const publicBaseUrl = process.env.R2_PUBLIC_BASE_URL || null;
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col px-5 py-14 sm:py-20">
@@ -67,7 +70,7 @@ export default async function Home({ searchParams }: PageProps) {
       </header>
 
       <section className="mt-10" aria-label="Badge generator">
-        <BadgeStudio initialUsername={initialUsername} />
+        <BadgeStudio initialUsername={initialUsername} publicBaseUrl={publicBaseUrl} />
       </section>
 
       <section className="mt-20 grid gap-6 sm:grid-cols-3" aria-label="How it works">

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { badgeKey, isStorageConfigured, readStoredBadge, storeBadge } from './r2';
+import { isStorageConfigured, publicBaseUrl, readStoredBadge, storeBadge } from './r2';
 
 const R2_VARS = [
   'R2_ACCOUNT_ID',
@@ -8,24 +8,6 @@ const R2_VARS = [
   'R2_BUCKET',
   'R2_PUBLIC_BASE_URL',
 ] as const;
-
-describe('badgeKey', () => {
-  it('namespaces by username and theme', () => {
-    expect(badgeKey('octocat', 'dark')).toBe('badges/octocat/dark.svg');
-    expect(badgeKey('octocat', 'light')).toBe('badges/octocat/light.svg');
-  });
-
-  it('lowercases so a case-different login is the same object', () => {
-    expect(badgeKey('OctoCat', 'dark')).toBe(badgeKey('octocat', 'dark'));
-  });
-
-  it('refuses to build a key that could escape the prefix', () => {
-    // An object key is a path; unvalidated input here writes outside the prefix.
-    expect(() => badgeKey('../../secret', 'dark')).toThrow();
-    expect(() => badgeKey('a/b', 'dark')).toThrow();
-    expect(() => badgeKey('', 'dark')).toThrow();
-  });
-});
 
 describe('storage without R2 configured', () => {
   const saved: Record<string, string | undefined> = {};
@@ -48,21 +30,22 @@ describe('storage without R2 configured', () => {
 
   it('reports itself as unconfigured', () => {
     expect(isStorageConfigured()).toBe(false);
+    expect(publicBaseUrl()).toBeNull();
   });
 
   it('reads as a miss rather than throwing', async () => {
-    await expect(readStoredBadge('octocat', 'dark')).resolves.toBeNull();
+    await expect(readStoredBadge('octocat', 'light')).resolves.toBeNull();
   });
 
-  it('accepts writes as a no-op', async () => {
-    await expect(storeBadge('octocat', 'dark', '<svg/>')).resolves.toBeUndefined();
+  it('reports a write as not stored rather than throwing', async () => {
+    await expect(storeBadge('octocat', 'light', '<svg/>')).resolves.toBe(false);
   });
 
-  it('makes no network call and logs nothing', async () => {
+  it('makes no network call and logs no warning', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
-    await readStoredBadge('octocat', 'dark');
-    await storeBadge('octocat', 'dark', '<svg/>');
+    await readStoredBadge('octocat', 'light');
+    await storeBadge('octocat', 'light', '<svg/>');
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(console.warn).not.toHaveBeenCalled();
@@ -78,5 +61,11 @@ describe('storage without R2 configured', () => {
 
     process.env.R2_BUCKET = 'badges';
     expect(isStorageConfigured()).toBe(true);
+  });
+
+  it('reports the public base URL only when one is set', () => {
+    expect(publicBaseUrl()).toBeNull();
+    process.env.R2_PUBLIC_BASE_URL = 'https://cdn.example.com';
+    expect(publicBaseUrl()).toBe('https://cdn.example.com');
   });
 });

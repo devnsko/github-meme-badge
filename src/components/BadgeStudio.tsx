@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { THEMES, type Theme } from '@/lib/badge';
+import { publicBadgeUrl } from '@/lib/storage/key';
 import { parseUsername } from '@/lib/username';
 import { CopyField } from './CopyField';
 
@@ -23,9 +24,17 @@ interface Generated {
   username: string;
   theme: Theme;
   path: string;
+  /** Whether the badge is durably in the bucket, per `X-Badge-Stored`. */
+  stored: boolean;
 }
 
-export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string }) {
+interface BadgeStudioProps {
+  initialUsername?: string;
+  /** Public bucket URL, when badges are served from Cloudflare's edge. */
+  publicBaseUrl?: string | null;
+}
+
+export function BadgeStudio({ initialUsername = '', publicBaseUrl = null }: BadgeStudioProps) {
   const [input, setInput] = useState(initialUsername);
   const [theme, setTheme] = useState<Theme>('light');
   const [generated, setGenerated] = useState<Generated | null>(null);
@@ -55,12 +64,17 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
     setError(null);
 
     let failure: string | null = null;
+    let stored = false;
     try {
       // Warm the cache and learn the real status before swapping the preview —
       // the endpoint answers errors with an SVG, which an <img> would happily
       // render without telling us anything went wrong.
       const res = await fetch(path);
-      if (!res.ok) {
+      if (res.ok) {
+        // Only trust the public URL once the server says the object is there.
+        const state = res.headers.get('x-badge-stored');
+        stored = state === 'written' || state === 'hit';
+      } else {
         failure = STATUS_MESSAGES[res.status] ?? 'Could not generate that badge.';
       }
     } catch {
@@ -69,7 +83,7 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
 
     if (id !== requestId.current) return;
 
-    setGenerated({ username, theme: nextTheme, path });
+    setGenerated({ username, theme: nextTheme, path, stored });
     setStatus(failure ? 'error' : 'ready');
     setError(failure);
 
@@ -94,7 +108,14 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
     if (generated) void generate(generated.username, next);
   };
 
-  const badgeUrl = generated ? `${origin}${generated.path}` : '';
+  // A README should hit Cloudflare's edge, not this app — but only once the
+  // object is confirmed written, otherwise the snippet is a broken image.
+  const servedFromEdge = Boolean(publicBaseUrl && generated?.stored);
+  const badgeUrl = !generated
+    ? ''
+    : servedFromEdge && publicBaseUrl
+      ? publicBadgeUrl(publicBaseUrl, generated.username, generated.theme)
+      : `${origin}${generated.path}`;
 
   return (
     <div className="w-full">
@@ -196,6 +217,11 @@ export function BadgeStudio({ initialUsername = '' }: { initialUsername?: string
                 value={`<a href="https://github.com/${generated.username}"><img src="${badgeUrl}" alt="${generated.username}'s GitHub meme badge" width="480" /></a>`}
               />
               <CopyField label="Direct URL" value={badgeUrl} />
+              <p className="px-1 text-sm font-medium text-ink-soft">
+                {servedFromEdge
+                  ? 'Served straight from Cloudflare — your README never touches this app.'
+                  : 'Served by this app, which regenerates the badge as your stats change.'}
+              </p>
             </div>
           )}
         </section>

@@ -1,10 +1,10 @@
 import { createHash } from 'crypto';
-import { after } from 'next/server';
 import { DEFAULT_THEME, isTheme, renderBadge, renderErrorBadge, type Theme } from '@/lib/badge';
+import { debugLog, startTimer } from '@/lib/debug';
 import { fetchStats, GitHubError } from '@/lib/github';
 import { clientKey, rateLimit } from '@/lib/rate-limit';
 import { scoreProfile } from '@/lib/scoring';
-import { readStoredBadge, storeBadge } from '@/lib/storage/r2';
+import { isStorageConfigured, readStoredBadge, storeBadge } from '@/lib/storage/r2';
 import { parseUsername } from '@/lib/username';
 
 // Buffer (avatar inlining) and the in-memory limiter both need the Node runtime.
@@ -18,6 +18,13 @@ const UPSTREAM_TIMEOUT_MS = 8_000;
 /** Reported on `X-Badge-Cache` so the storage layer is observable in prod. */
 type CacheStatus = 'hit' | 'miss' | 'stale';
 
+/**
+ * Reported on `X-Badge-Stored`. The studio uses it to decide whether it may
+ * hand out the public Cloudflare URL — offering one for an object that was
+ * never written would put a broken image in somebody's README.
+ */
+type StoredStatus = 'hit' | 'written' | 'failed' | 'off';
+
 function etagFor(svg: string): string {
   return `"${createHash('sha256').update(svg).digest('hex').slice(0, 32)}"`;
 }
@@ -28,7 +35,13 @@ function svgResponse(
     status = 200,
     cache = SUCCESS_CACHE,
     cacheStatus,
-  }: { status?: number; cache?: string; cacheStatus?: CacheStatus } = {},
+    storedStatus,
+  }: {
+    status?: number;
+    cache?: string;
+    cacheStatus?: CacheStatus;
+    storedStatus?: StoredStatus;
+  } = {},
 ): Response {
   const headers: Record<string, string> = {
     'Content-Type': 'image/svg+xml; charset=utf-8',
@@ -37,10 +50,13 @@ function svgResponse(
     // sniffed into something executable.
     'X-Content-Type-Options': 'nosniff',
     'Access-Control-Allow-Origin': '*',
+    // Same-origin callers read these; they carry no user data.
+    'Access-Control-Expose-Headers': 'X-Badge-Cache, X-Badge-Stored',
     ETag: etagFor(svg),
   };
 
   if (cacheStatus) headers['X-Badge-Cache'] = cacheStatus;
+  if (storedStatus) headers['X-Badge-Stored'] = storedStatus;
 
   return new Response(svg, { status, headers });
 }
@@ -64,6 +80,8 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ username: string }> },
 ) {
+  const elapsed = startTimer();
+
   const theme = (() => {
     const requested = new URL(request.url).searchParams.get('theme');
     return isTheme(requested) ? requested : DEFAULT_THEME;
@@ -83,11 +101,13 @@ export async function GET(
   const username = decoded === null ? null : parseUsername(decoded);
 
   if (!username) {
+    debugLog('badge', { user: raw.slice(0, 40), result: 'invalid', ms: elapsed() });
     return errorResponse('That is not a valid GitHub username.', 400, theme);
   }
 
   const limit = rateLimit(clientKey(request));
   if (!limit.allowed) {
+    debugLog('badge', { user: username, result: 'rate-limited', ms: elapsed() });
     return new Response(renderErrorBadge('Too many requests, slow down a little.', theme), {
       status: 429,
       headers: {
@@ -102,7 +122,11 @@ export async function GET(
   // keeps a widely-embedded README from exhausting the API quota.
   const stored = await readStoredBadge(username, theme);
   if (stored && !stored.stale) {
-    return notModified(request, stored.svg) ?? svgResponse(stored.svg, { cacheStatus: 'hit' });
+    debugLog('badge', { user: username, theme, cache: 'hit', github: false, ms: elapsed() });
+    return (
+      notModified(request, stored.svg) ??
+      svgResponse(stored.svg, { cacheStatus: 'hit', storedStatus: 'hit' })
+    );
   }
 
   const timeout = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
@@ -112,29 +136,56 @@ export async function GET(
     const score = scoreProfile(stats);
     const svg = renderBadge(stats, theme, score);
 
-    // `after` keeps the upload off the response path without risking the
-    // serverless instance being frozen mid-write.
-    after(() => storeBadge(username, theme, svg));
+    // Awaited rather than deferred: the studio hands out the public Cloudflare
+    // URL for this object, so it has to exist before the response says it does.
+    // On a miss the request is already spending seconds on the GitHub API, so
+    // one more round trip is not what makes it slow.
+    const written = await storeBadge(username, theme, svg);
+    const storedStatus: StoredStatus = isStorageConfigured()
+      ? written
+        ? 'written'
+        : 'failed'
+      : 'off';
 
-    return notModified(request, svg) ?? svgResponse(svg, { cacheStatus: 'miss' });
+    debugLog('badge', {
+      user: username,
+      theme,
+      cache: 'miss',
+      github: true,
+      title: score.archetype,
+      tier: score.tier,
+      stored: storedStatus,
+      bytes: svg.length,
+      ms: elapsed(),
+    });
+
+    return notModified(request, svg) ?? svgResponse(svg, { cacheStatus: 'miss', storedStatus });
   } catch (error) {
     // GitHub is down, slow, or rate-limiting us — an expired badge still beats
     // an error card in somebody's README.
     if (stored) {
-      return svgResponse(stored.svg, { cacheStatus: 'stale', cache: ERROR_CACHE });
+      debugLog('badge', { user: username, theme, cache: 'stale', ms: elapsed() });
+      return svgResponse(stored.svg, {
+        cacheStatus: 'stale',
+        storedStatus: 'hit',
+        cache: ERROR_CACHE,
+      });
     }
 
     if (error instanceof GitHubError) {
       const message =
         error.status === 404 ? `No GitHub user called "${username}".` : error.message;
+      debugLog('badge', { user: username, result: 'github-error', status: error.status, ms: elapsed() });
       return errorResponse(message, error.status, theme);
     }
 
     if (error instanceof DOMException && error.name === 'TimeoutError') {
+      debugLog('badge', { user: username, result: 'github-timeout', ms: elapsed() });
       return errorResponse('GitHub took too long to answer.', 504, theme);
     }
 
     console.error('badge generation failed', error);
+    debugLog('badge', { user: username, result: 'error', ms: elapsed() });
     return errorResponse('Something went wrong generating this badge.', 500, theme);
   }
 }

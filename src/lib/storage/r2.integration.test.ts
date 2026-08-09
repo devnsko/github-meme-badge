@@ -74,18 +74,43 @@ describe('storeBadge', () => {
     expect(request.url).toBe('/meme-badges/badges/octocat/dark.svg');
     expect(request.body).toBe('<svg>badge</svg>');
     expect(request.headers['content-type']).toContain('image/svg+xml');
+
+    // R2 answers `411 Length Required` for a chunked PUT. Handing aws4fetch's
+    // signed Request straight to fetch turns the body into a stream, which
+    // undici sends without a Content-Length — so the length is the assertion
+    // that matters here, not just that a request went out.
+    expect(request.headers['content-length']).toBe(
+      String(Buffer.byteLength('<svg>badge</svg>')),
+    );
+    expect(request.headers['transfer-encoding']).toBeUndefined();
     // SigV4, produced by aws4fetch — proves the request is actually signed.
     expect(request.headers.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=test-key-id/);
     // aws4fetch declares the payload unsigned; R2 accepts that over TLS.
     expect(request.headers['x-amz-content-sha256']).toBe('UNSIGNED-PAYLOAD');
   });
 
-  it('swallows an R2 error instead of failing the caller', async () => {
+  it('reports success so the caller knows the object is really there', async () => {
+    respond = () => ({ status: 200 });
+    await expect(storeBadge('octocat', 'dark', '<svg/>')).resolves.toBe(true);
+  });
+
+  it('reports failure and swallows the error instead of failing the caller', async () => {
     respond = () => ({ status: 500, body: 'boom' });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await expect(storeBadge('octocat', 'dark', '<svg/>')).resolves.toBeUndefined();
+    await expect(storeBadge('octocat', 'dark', '<svg/>')).resolves.toBe(false);
     expect(console.warn).toHaveBeenCalled();
+  });
+
+  it('sends a body a strict S3 endpoint accepts, whatever its size', async () => {
+    // A realistic badge carries a base64 avatar, so the body is ~13kB.
+    const svg = `<svg>${'x'.repeat(13_000)}</svg>`;
+    respond = () => ({ status: 200 });
+
+    await storeBadge('octocat', 'light', svg);
+
+    expect(captured[0].headers['content-length']).toBe(String(Buffer.byteLength(svg)));
+    expect(captured[0].body).toHaveLength(svg.length);
   });
 });
 
