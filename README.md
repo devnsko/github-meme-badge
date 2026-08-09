@@ -80,14 +80,44 @@ badges/<username>/<theme>.svg
 
 **There is no database, and none is needed.** The SVG *is* the record: the object key carries the identity and R2's own `Last-Modified` carries the freshness, so there is no schema to migrate and no second system to keep in sync. Keys are lowercased, since GitHub logins are case-insensitive and `OctoCat` must not become a second object.
 
-With storage configured the route gains two behaviours:
+With storage configured the route gains three behaviours:
 
 - **A fresh stored badge skips GitHub entirely.** Within the 6-hour TTL the SVG is served straight from R2, which is what stops a widely-embedded README from spending the API quota.
 - **A stale badge beats an error.** If GitHub is down, slow, or rate-limiting, the expired object is served instead of an error card.
+- **READMEs are pointed at Cloudflare, not at this app.** With `R2_PUBLIC_BASE_URL` set, the copy-ready snippets use the public object URL, so an embedded badge is served by Cloudflare's edge and never reaches this deployment.
 
-The response carries `X-Badge-Cache: hit | miss | stale`, so this is observable in production.
+Two response headers make that observable, and the studio depends on the second:
 
-Storage is optional throughout: with the environment unset every entry point becomes a no-op, and an R2 outage costs the cache, never the request. Reads and writes are capped at 3s, and writes run inside `after()` so the upload stays off the response path.
+| Header | Values |
+| --- | --- |
+| `X-Badge-Cache` | `hit` · `miss` · `stale` |
+| `X-Badge-Stored` | `hit` · `written` · `failed` · `off` |
+
+The public URL is only offered once `X-Badge-Stored` confirms the object is really in the bucket — handing out a link to an object that was never written would put a broken image in somebody's README. If R2 is misconfigured or down, the snippets quietly fall back to this app's URL.
+
+For the same reason the upload is awaited rather than deferred with `after()`: the snippet claims the object exists, so it has to exist before the response says so. On a cache miss the request is already spending seconds on the GitHub API, so one more round trip is not what makes it slow.
+
+Storage stays optional throughout: with the environment unset every entry point is a no-op, and an R2 outage costs the cache, never the request. Reads and writes are capped at 3s.
+
+### Debugging
+
+Development traces every step; `BADGE_DEBUG=1` keeps it on anywhere else. The fields are keys, sizes, timings and status codes — no secrets.
+
+```
+[badge] r2.read key=badges/devnsko/light.svg result=miss ms=31
+[badge] r2.write key=badges/devnsko/light.svg result=ok bytes=10438 ms=21
+[badge] badge user=devnsko theme=light cache=miss github=true stored=written bytes=10438 ms=800
+[badge] r2.read key=badges/devnsko/light.svg result=hit bytes=10438 ageMin=0 ms=18
+[badge] badge user=devnsko theme=light cache=hit github=false ms=19
+```
+
+A development-only endpoint answers "is it configured, and is this badge actually in the bucket":
+
+```bash
+curl "http://localhost:3000/api/debug/storage?u=devnsko"
+```
+
+It reports `configured`, the bucket, the public base URL, and — with `?u=` — the object key, whether it was found, its size, age, staleness and public URL. It returns 404 in production with no flag to override, because it names the bucket.
 
 ### Setting it up
 
@@ -95,7 +125,9 @@ Create a bucket and an R2 API token with **Object Read & Write**, then set `R2_A
 
 R2 is reached over its S3-compatible API, signed with [`aws4fetch`](https://github.com/mhart/aws4fetch) (~4kB over plain `fetch`) rather than the AWS SDK, which would add megabytes to a serverless bundle for one PUT and one GET. `R2_ENDPOINT` points the same code at any S3-compatible store, which is how the integration tests run against a local stub — and how you can run against MinIO locally.
 
-Setting `R2_PUBLIC_BASE_URL` (an r2.dev or custom domain on a public bucket) lets READMEs point at Cloudflare's edge instead of this app; `publicBadgeUrl()` builds those URLs.
+To serve badges from the edge, make the bucket public (r2.dev or a custom domain) and set `R2_PUBLIC_BASE_URL`. The snippets switch over automatically.
+
+One wrinkle worth knowing about: the request is signed and issued in two steps rather than through `AwsClient.fetch`. That helper passes its signed `Request` straight to `fetch`, and a Request's body is a stream — undici then sends it chunked with no `Content-Length`, and R2 answers `411 Length Required`. Signing separately and handing the raw string body to `fetch` lets the runtime compute the length itself.
 
 [`r2.ts`](src/lib/storage/r2.ts) opens with `import 'server-only'`, which turns an accidental import from a client component into a build error — the bucket credentials must never reach the browser.
 
@@ -120,7 +152,8 @@ Copy `.env.example` to `.env.local` if you want to raise the GitHub rate limit:
 | `R2_SECRET_ACCESS_KEY` | No | Server-side only. Never prefix it with `NEXT_PUBLIC_`. |
 | `R2_BUCKET` | No | Bucket the badge objects are written to. |
 | `R2_ENDPOINT` | No | Override for any S3-compatible endpoint, e.g. MinIO. |
-| `R2_PUBLIC_BASE_URL` | No | Public bucket URL, if you want to serve badges from Cloudflare's edge. |
+| `R2_PUBLIC_BASE_URL` | No | Public bucket URL. Set it to serve embedded badges from Cloudflare's edge. |
+| `BADGE_DEBUG` | No | `1` keeps runtime tracing on outside development. |
 
 ## Checks
 
